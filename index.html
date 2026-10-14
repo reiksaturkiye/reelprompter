@@ -140,6 +140,7 @@ input[type=range]{width:100%;accent-color:var(--accent);height:28px}
 <section id="library" class="screen">
   <div class="bar">
     <h1>Reel<span>Prompter</span></h1>
+    <button class="iconbtn hidden" id="installBtn" title="Telefona yükle" style="width:auto;padding:0 12px;font-weight:700;background:var(--accent);color:#fff">Yükle</button>
     <button class="iconbtn" id="importBtn" title="Metin dosyası içe aktar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
     </button>
@@ -293,7 +294,8 @@ input[type=range]{width:100%;accent-color:var(--accent);height:28px}
 
     <div data-p="cam" class="hidden">
       <div class="field"><label>Video kalitesi</label>
-        <div class="seg" id="quality"><button data-v="720">720p</button><button data-v="1080">1080p</button></div></div>
+        <div class="seg" id="quality"><button data-v="720">720p</button><button data-v="1080">1080p</button><button data-v="2160">4K</button></div>
+        <div class="note" id="resInfo">4K için arka kamera önerilir; çoğu telefonun ön kamerası en fazla 1080p verir. Efektsiz (arka plan, logo, bant kapalı) çekimde video doğrudan kameradan, en yüksek kalitede kaydedilir.</div></div>
       <div class="toggle"><div>Önizlemeyi aynala<small>Kayıt her zaman doğru yönde kaydedilir. Görsel arka plan, logo veya alt bant açıkken önizleme aynalanmaz.</small></div><label class="sw"><input type="checkbox" id="sPrevMir"><span></span></label></div>
       <div class="toggle"><div>Kamerayı kapat<small>Sadece prompter (harici kamerayla kullanım)</small></div><label class="sw"><input type="checkbox" id="sCamOff"><span></span></label></div>
       <div class="note"><b>Kumanda:</b> Bluetooth sunum kumandası veya klavye kullanabilirsin. Boşluk = başlat/duraklat, ↑/↓ = hız, ←/→ = geri/ileri, Enter = kayıt.<br><br><b>Ekrana dokunma:</b> Yazıya dokun = duraklat/devam, parmakla kaydır = elle ileri/geri.</div>
@@ -644,15 +646,20 @@ $("#voiceBtn").onclick = () => voice.on ? stopVoice() : startVoice();
    ========================================================= */
 const cam = $("#cam"), out = $("#out"), octx = out.getContext("2d");
 let stream = null, audioTrack = null;
-const W = () => S.q === "1080" ? 1080 : 720, H = () => S.q === "1080" ? 1920 : 1280;
+const QW = { "720":720, "1080":1080, "2160":2160 };
+let camShort = 0; // shorter side the camera actually delivers
+const W = () => { const t = QW[S.q] || 720; return camShort ? Math.min(t, camShort) : t; };
+const H = () => Math.round(W() * 16 / 9);
+const hasEffects = () => S.bg !== "none" || (S.logo && logoImg) || (S.band && (S.band1 || S.band2));
 
 async function startCamera(){
   stopCamera();
   if(S.camOff) return;
-  out.width = W(); out.height = H();
+  camShort = 0;
+  const tw = QW[S.q] || 720, th = Math.round(tw * 16 / 9);
   try{
     stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:S.facing, width:{ideal:H()}, height:{ideal:W()}, frameRate:{ideal:30} },
+      video:{ facingMode:S.facing, width:{ideal:th}, height:{ideal:tw}, frameRate:{ideal:30} },
       audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
     });
   }catch(e){
@@ -662,6 +669,14 @@ async function startCamera(){
   audioTrack = stream.getAudioTracks()[0] || null;
   cam.srcObject = stream;
   try{ await cam.play(); }catch(_){}
+  const st = stream.getVideoTracks()[0].getSettings();
+  const vw = st.width || cam.videoWidth, vh = st.height || cam.videoHeight;
+  camShort = Math.min(vw, vh) || 0;
+  out.width = W(); out.height = H(); prepareBackground();
+  const label = camShort >= 2000 ? "4K" : camShort + "p";
+  $("#resInfo") && ($("#resInfo").dataset.cam = label);
+  if((QW[S.q]||720) > camShort && camShort) toast(`Bu kamera en fazla ${label} veriyor` + (S.facing === "user" ? " — 4K için arka kamerayı dene" : ""), 4000);
+  else toast(`Kamera: ${label}`, 1500);
 }
 function stopCamera(){ if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; } }
 
@@ -823,11 +838,15 @@ async function startRecording(){
   if(voice.on && /Android/i.test(navigator.userAgent)) toast("Not: bazı telefonlarda kayıt sırasında ses takibi mikrofonu paylaşamaz", 3500);
   setPos(0); lastHi = -1; voice.idx = 0; P.target = 0;
   busy = true; await countdown(); busy = false;
-  const vs = out.captureStream(30);
-  const tracks = [...vs.getVideoTracks()]; if(audioTrack) tracks.push(audioTrack);
+  // No effects + portrait camera frames: record the camera directly (full native quality, no re-drawing)
+  const vt = stream.getVideoTracks()[0], st = vt.getSettings();
+  const direct = !hasEffects() && st.height > st.width;
+  const tracks = direct ? [vt] : [...out.captureStream(30).getVideoTracks()];
+  if(audioTrack) tracks.push(audioTrack);
+  if(!direct && S.q === "2160" && hasEffects()) toast("4K + efektler telefonu zorlayabilir; takılma olursa 1080p'ye geç", 3500);
   const ms = new MediaStream(tracks);
   rec.mime = pickMime(); rec.ext = rec.mime.includes("mp4") ? "mp4" : "webm";
-  rec.mr = new MediaRecorder(ms, rec.mime ? { mimeType:rec.mime, videoBitsPerSecond: S.q === "1080" ? 8e6 : 5e6 } : undefined);
+  rec.mr = new MediaRecorder(ms, rec.mime ? { mimeType:rec.mime, videoBitsPerSecond: { "720":5e6, "1080":10e6, "2160":40e6 }[S.q] || 5e6, audioBitsPerSecond: 192000 } : undefined);
   rec.chunks = [];
   rec.mr.ondataavailable = e => e.data.size && rec.chunks.push(e.data);
   rec.mr.onstop = () => { rec.blob = new Blob(rec.chunks, { type: rec.mime || "video/webm" }); openReview(); };
@@ -1005,6 +1024,10 @@ function syncSettingsUI(){
    BOOT
    ========================================================= */
 renderLibrary();
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("#installBtn").classList.remove("hidden"); });
+$("#installBtn").onclick = async () => { if(!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("#installBtn").classList.add("hidden"); };
+window.addEventListener("appinstalled", () => { $("#installBtn").classList.add("hidden"); toast("ReelPrompter ana ekrana eklendi"); });
 if("serviceWorker" in navigator && location.protocol === "https:"){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }

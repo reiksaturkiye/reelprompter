@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION when you update index.html.
-const VERSION = "rp-v1";
+const VERSION = "rp-v2";
 const SHELL = ["./", "index.html", "manifest.json", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
